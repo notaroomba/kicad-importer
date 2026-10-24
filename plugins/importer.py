@@ -87,7 +87,7 @@ def find_lcsc(mpn, api):
 def import_part(lcsc_id, project_dir, api):
     """Write symbol, footprint and 3D model for lcsc_id into <project>/lib/parts/.
 
-    Returns (symbol_name, footprint_name, mpn).
+    Returns (symbol_name, footprint_name, mpn, 3d_files).
     """
     lib_dir = Path(project_dir) / "lib" / LIB
     out = lib_dir / LIB
@@ -99,10 +99,27 @@ def import_part(lcsc_id, project_dir, api):
     if not cad:
         raise RuntimeError("EasyEDA has no CAD data for " + lcsc_id)
 
+    models = []
+    m3d = Easyeda3dModelImporter(easyeda_cp_cad_data=cad, download_raw_3d_model=True, api=api).output
+    if m3d:
+        shapes.mkdir(parents=True, exist_ok=True)
+        model = Exporter3dModelKicad(model_3d=m3d)
+        if model.output:
+            model.export(output_dir=str(shapes), overwrite=True)
+            wrl = shapes / (m3d.name + ".wrl")
+            if wrl.is_file():
+                wrl.write_text(wrl.read_text(encoding="utf-8").replace("transparency 1.0", "transparency 0.0"), encoding="utf-8")
+        elif m3d.step:  # OBJ download failed but STEP came through
+            (shapes / (m3d.name + ".step")).write_bytes(m3d.step)
+        models = [p.name for p in (shapes / (m3d.name + ".wrl"), shapes / (m3d.name + ".step")) if p.is_file()]
+        if not models:
+            log.warning("3D model download failed for %s", lcsc_id)
+
     fp = EasyedaFootprintImporter(easyeda_cp_cad_data=cad).get_footprint()
     ExporterFootprintKicad(footprint=fp).export(
         footprint_full_path=str(pretty / (fp.info.name + ".kicad_mod")),
         model_3d_path="${KIPRJMOD}/lib/parts/parts.3dshapes",
+        model_3d_extension="step" if models and not models[0].endswith(".wrl") else "wrl",
     )
 
     sym = EasyedaSymbolImporter(easyeda_cp_cad_data=cad).get_symbol()
@@ -112,17 +129,7 @@ def import_part(lcsc_id, project_dir, api):
         lib_path=lib_path, footprint_lib_name=LIB, overwrite=True
     )
 
-    model = Exporter3dModelKicad(
-        model_3d=Easyeda3dModelImporter(easyeda_cp_cad_data=cad, download_raw_3d_model=True, api=api).output
-    )
-    if model.output and model.export(output_dir=str(shapes), overwrite=True):
-        wrl = shapes / (model.output.name + ".wrl")
-        if wrl.is_file():
-            wrl.write_text(wrl.read_text(encoding="utf-8").replace("transparency 1.0", "transparency 0.0"), encoding="utf-8")
-    else:
-        log.warning("No 3D model for %s", lcsc_id)
-
-    return sym.info.name, fp.info.name, sym.info.mpn
+    return sym.info.name, fp.info.name, sym.info.mpn, models
 
 
 def add_lib_tables(project_dir):
@@ -152,10 +159,10 @@ def upsert_csv(project_dir, row):
 
 def run_import(info, project_dir, api):
     """info is parse_link() output with lcsc_id filled in. Returns the CSV row."""
-    symbol, footprint, mpn = import_part(info["lcsc_id"], project_dir, api)
+    symbol, footprint, mpn, models = import_part(info["lcsc_id"], project_dir, api)
     add_lib_tables(project_dir)
     row = dict(info, mpn=mpn or info["mpn"], symbol=LIB + ":" + symbol, footprint=LIB + ":" + footprint,
-               imported_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
+               imported_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), models=models)
     upsert_csv(project_dir, row)
     return row
 
@@ -219,6 +226,7 @@ if pcbnew:
                 self.say("Importing %s..." % info["lcsc_id"])
                 row = run_import(info, self.project_dir, self.api)
                 self.say("Done: %s / %s" % (row["symbol"], row["footprint"]))
+                self.say("3D: " + (", ".join(row["models"]) or "none, EasyEDA has no model or the download failed"))
                 self.link.SetValue("")
             except Exception as e:
                 self.say("Error: %s" % e)
