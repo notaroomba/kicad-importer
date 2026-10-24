@@ -1,0 +1,53 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build PCM package
+        env:
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, os, zipfile
+          from pathlib import Path
+
+          tag = os.environ["TAG"]
+          version = tag.lstrip("v")
+          files = [p for d in ("plugins", "resources") for p in sorted(Path(d).rglob("*"))
+                   if p.is_file() and "__pycache__" not in p.parts]
+          meta = json.loads(Path("metadata.json").read_text())
+          ver = meta["versions"][0]
+          ver["version"] = version
+          ver["install_size"] = sum(p.stat().st_size for p in files)
+
+          Path("dist").mkdir(exist_ok=True)
+          zip_name = f"kicad-importer-{version}.zip"
+          zip_path = Path("dist") / zip_name
+          with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as z:
+              for p in files:
+                  z.write(p, p.as_posix())
+              z.writestr("metadata.json", json.dumps(meta, indent=2))
+
+          data = zip_path.read_bytes()
+          ver["download_sha256"] = hashlib.sha256(data).hexdigest()
+          ver["download_size"] = len(data)
+          ver["download_url"] = f"https://github.com/{os.environ['REPO']}/releases/download/{tag}/{zip_name}"
+          Path("dist/metadata.json").write_text(json.dumps(meta, indent=2))
+          print(json.dumps(meta, indent=2))
+          PY
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "${{ github.ref_name }}" dist/*.zip dist/metadata.json --title "${{ github.ref_name }}" --generate-notes
