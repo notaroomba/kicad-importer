@@ -51,6 +51,9 @@ def parse_link(text):
         # /en/products/detail/<mfr>/<mpn>/<id>
         if "detail" in low and low.index("detail") + 2 < len(parts):
             return dict(source="digikey", url=text, mpn=parts[low.index("detail") + 2], lcsc_id="")
+        # old format: /product-detail/en/<mfr>/<mpn>/<dk-pn>/<id>
+        if "product-detail" in low and low.index("product-detail") + 3 < len(parts):
+            return dict(source="digikey", url=text, mpn=parts[low.index("product-detail") + 3], lcsc_id="")
     elif site("mouser"):
         # /ProductDetail/<mfr>/<mpn>?qs=...  or  /ProductDetail/595-LM358DR
         if "productdetail" in low:
@@ -264,6 +267,7 @@ if __name__ == "__main__":
     check("https://www.digikey.com/en/products/detail/stmicroelectronics/STM32F405RGT6/2754208", source="digikey", mpn="STM32F405RGT6")
     check("https://www.digikey.de/de/products/detail/murata-electronics/GRM188R71H104KA93D/600088?s=abc", mpn="GRM188R71H104KA93D")
     check("https://www.digikey.com/en/products/detail/texas-instruments/SN74LVC1G04DBVR%2FT/1", mpn="SN74LVC1G04DBVR/T")
+    check("https://www.digikey.com/product-detail/en/stmicroelectronics/STM32F405RGT6/497-11767-ND/2754208", mpn="STM32F405RGT6")
     check("https://www.mouser.com/ProductDetail/Texas-Instruments/LM358DR?qs=abc%3D%3D", source="mouser", mpn="LM358DR")
     check("https://www.mouser.de/ProductDetail/595-LM358DR", mpn="LM358DR")
     check("https://www.mouser.com/ProductDetail/81-GRM188R71H104KA3D", mpn="GRM188R71H104KA3D")
