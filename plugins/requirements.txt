@@ -1,0 +1,2 @@
+# Nothing to install: the plugin only uses the standard library and the wx that ships with KiCad.
+# KiCad 10 still needs this file to exist before it shows the schematic editor button.
