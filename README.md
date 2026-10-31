@@ -82,6 +82,8 @@ If there's no exact match on LCSC, the pick list has an extra first option, "Get
 
 I didn't make it log in and scrape those sites for you. They don't have a public API, they block bots, and it would break every time they change their site. One click in your own browser is way more reliable.
 
+A bare part number only gets you DigiKey's search page. To land on the right models page straight away, register a free app at [developer.digikey.com](https://developer.digikey.com) and put its client ID and secret in `~/.config/kicad-importer/digikey.json` as `{"client_id": "...", "client_secret": "..."}` (or set `DIGIKEY_CLIENT_ID` and `DIGIKEY_CLIENT_SECRET`). The plugin then asks DigiKey's official API for the product and opens its models page. It still opens the page for you, you pick the format and click Download.
+
 If you saved a download somewhere else, use the "Import file..." button and pick it.
 
 Some downloads are a whole part family (Würth's zip for 744042100 has every WE-TPC inductor in it). The plugin only takes the part you asked for, plus the footprint and 3D model it uses.

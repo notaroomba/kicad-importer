@@ -1,10 +1,13 @@
 """Import parts from LCSC / DigiKey / Mouser / Newark links into a KiCad project library."""
 
 import csv
+import json
 import logging
 import os
 import re
 import time
+import urllib.parse
+import urllib.request
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -106,6 +109,57 @@ def find_lcsc(mpn, api):
     exact = [r for r in results if _norm(r["model"]) == _norm(mpn)]
     exact.sort(key=lambda r: -(r.get("stock") or 0))
     return (exact[0] if exact else None), results
+
+
+# ---------------- DigiKey API (optional) ----------------
+
+DK_CONFIG = Path.home() / ".config" / "kicad-importer" / "digikey.json"
+
+
+def _digikey_creds():
+    """(client_id, client_secret) from DIGIKEY_CLIENT_ID/SECRET or ~/.config/kicad-importer/digikey.json."""
+    cid, secret = os.environ.get("DIGIKEY_CLIENT_ID"), os.environ.get("DIGIKEY_CLIENT_SECRET")
+    if not (cid and secret) and DK_CONFIG.is_file():
+        try:
+            cfg = json.loads(DK_CONFIG.read_text(encoding="utf-8"))
+            cid, secret = cfg.get("client_id"), cfg.get("client_secret")
+        except ValueError:
+            pass
+    return (cid, secret) if cid and secret else None
+
+
+def digikey_models_url(mpn, host="www.digikey.com"):
+    """DigiKey's CAD models page for an exact MPN via DigiKey's official product API, or "".
+
+    Needs your own free API app (developer.digikey.com): put its client id/secret in
+    DIGIKEY_CLIENT_ID / DIGIKEY_CLIENT_SECRET or in ~/.config/kicad-importer/digikey.json.
+    """
+    creds = _digikey_creds()
+    if not creds or not mpn:
+        return ""
+    try:
+        def call(url, data, headers):
+            with urllib.request.urlopen(urllib.request.Request(url, data=data, headers=headers), timeout=15) as r:
+                return json.loads(r.read().decode("utf-8"))
+
+        token = call("https://api.digikey.com/v1/oauth2/token",
+                     urllib.parse.urlencode(dict(client_id=creds[0], client_secret=creds[1],
+                                                 grant_type="client_credentials")).encode(),
+                     {"Content-Type": "application/x-www-form-urlencoded"})["access_token"]
+        found = call("https://api.digikey.com/products/v4/search/keyword",
+                     json.dumps({"Keywords": mpn, "Limit": 10}).encode(),
+                     {"Authorization": "Bearer " + token, "X-DIGIKEY-Client-Id": creds[0],
+                      "Content-Type": "application/json"})
+    except Exception as e:  # network, auth, bad JSON: fall back to the search page
+        log.warning("DigiKey API lookup failed: %s", e)
+        return ""
+    for prod in found.get("Products") or []:
+        name = prod.get("ManufacturerProductNumber") or prod.get("ManufacturerPartNumber") or ""
+        if _norm(name) == _norm(mpn):
+            pid = re.search(r"/(\d+)(?:[/?#].*)?$", prod.get("ProductUrl") or "")
+            if pid:
+                return "https://%s/en/models/%s" % (host, pid.group(1))
+    return ""
 
 
 # ---------------- library writing ----------------
@@ -587,6 +641,9 @@ if wx:
         # --- browser downloads ---
 
         def start_watch(self, info):
+            if not info.get("cad_url") and info["mpn"] and _digikey_creds():
+                self.say("Asking DigiKey for the part's CAD models page...")
+                info["cad_url"] = digikey_models_url(info["mpn"])
             url = (info.get("cad_url") or info["url"]
                    or "https://www.digikey.com/en/products/result?keywords=" + quote(info["mpn"] or info["lcsc_id"]))
             self.watch = dict(info=info, since=time.time() - 2, seen={}, done=set(), footprint=None)
@@ -740,6 +797,26 @@ def self_check():
         raise AssertionError(bad)
     assert _norm("LM358-DR / x") == _norm("lm358drX")
     assert _norm("XL358D") != _norm("LM358DR")
+    import io
+    real, urllib.request.urlopen = urllib.request.urlopen, None
+    seen = []
+
+    def fake(req, timeout=0):
+        seen.append(req.full_url)
+        body = ({"access_token": "t"} if "oauth2" in req.full_url else {"Products": [
+            {"ManufacturerProductNumber": "NRVB130LSFT1G-X", "ProductUrl": "https://www.digikey.com/en/products/detail/a/b/1"},
+            {"ManufacturerProductNumber": "NRVB130LSFT1G", "ProductUrl": "https://www.digikey.com/en/products/detail/onsemi/NRVB130LSFT1G/5258002?s=x"}]})
+        return io.BytesIO(json.dumps(body).encode())
+
+    urllib.request.urlopen = fake
+    os.environ.update(DIGIKEY_CLIENT_ID="id", DIGIKEY_CLIENT_SECRET="secret")
+    try:
+        assert digikey_models_url("NRVB130LSFT1G") == "https://www.digikey.com/en/models/5258002", seen
+        assert digikey_models_url("NRVB130LSFT1") == ""  # no exact match, no guessing
+        del os.environ["DIGIKEY_CLIENT_ID"]
+        assert digikey_models_url("NRVB130LSFT1G") == "" or DK_CONFIG.is_file()
+    finally:
+        urllib.request.urlopen = real
     print("all link checks passed")
 
 
