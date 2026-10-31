@@ -84,6 +84,16 @@ I didn't make it log in and scrape those sites for you. They don't have a public
 
 A bare part number only gets you DigiKey's search page. To land on the right models page straight away, register a free app at [developer.digikey.com](https://developer.digikey.com) and put its client ID and secret in `~/.config/kicad-importer/digikey.json` as `{"client_id": "...", "client_secret": "..."}` (or set `DIGIKEY_CLIENT_ID` and `DIGIKEY_CLIENT_SECRET`). The plugin then asks DigiKey's official API for the product and opens its models page. It still opens the page for you, you pick the format and click Download. With the credentials set it also asks the API for the manufacturer's STEP file. If DigiKey lists a link for it, the plugin downloads it and attaches it to the footprint, so the only thing left for you to download is the Ultra Librarian or SnapMagic KiCad zip. If DigiKey doesn't list one, the log says so.
 
+### DigiKey symbols instead of LCSC ones
+
+LCSC's symbols are sometimes off. Tick "Use DigiKey symbols" in the import window (it remembers the setting) and every import goes like this:
+
+1. The part imports from LCSC like normal, so it works right away
+2. DigiKey's models page opens. Download the KiCad (V6 and later) format from SnapMagic or Ultra Librarian
+3. The plugin swaps that symbol in and points it at LCSC's footprint and 3D model, which stay as they are
+
+It checks that the symbol's pin numbers exist on the footprint. Diodes and transistors are the usual suspects (`A`/`K` vs `1`/`2`), so if you see a warning, check the pinout before using the part.
+
 If you saved a download somewhere else, use the "Import file..." button and pick it.
 
 Some downloads are a whole part family (Würth's zip for 744042100 has every WE-TPC inductor in it). The plugin only takes the part you asked for, plus the footprint and 3D model it uses.

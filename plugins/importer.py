@@ -365,18 +365,34 @@ def _is_part(name, mpn):
     return bool(m) and any(_norm("".join(toks[i:])) == m for i in range(len(toks)))
 
 
-def import_cad_files(path, project_dir, attach_to=None, mpn=""):
+def _drop_symbol(lib_path, name):
+    path = Path(lib_path)
+    if not path.is_file():
+        return
+    text = path.read_text(encoding="utf-8")
+    for old in _top_level(text, "symbol"):
+        if re.match(r'\(symbol\s+"%s"' % re.escape(name), old):
+            path.write_text(re.sub(r"\n[ \t]*" + re.escape(old), "", text, count=1), encoding="utf-8")
+            return
+
+
+def import_cad_files(path, project_dir, attach_to=None, mpn="", symbols_only=False, footprint="", replace=""):
     """Import symbols, footprints and 3D models from a downloaded zip/folder/file.
 
     Vendor zips can hold a whole part family. With an mpn, only that part's symbol
     plus the footprint and 3D model it uses get imported. A file with only a 3D
     model gets attached to the footprint named attach_to.
+    symbols_only takes just the symbol, points it at the existing footprint and
+    replaces the symbol named replace (used to swap in DigiKey symbols over LCSC ones).
     Returns (symbols, footprints, models).
     """
     files = read_cad_files(path)
+    if symbols_only:
+        files = {n: b for n, b in files.items() if n.lower().endswith(".kicad_sym")}
     if not files:
-        raise ValueError("No KiCad (.kicad_sym/.kicad_mod) or 3D (.step/.wrl) files in %s. "
-                         "If it's from Ultra Librarian or SnapMagic, pick the KiCad v6+ format." % Path(path).name)
+        raise ValueError("No %s files in %s. If it's from Ultra Librarian or SnapMagic, pick the KiCad v6+ format."
+                         % ("symbol (.kicad_sym)" if symbols_only else "KiCad (.kicad_sym/.kicad_mod) or 3D (.step/.wrl)",
+                            Path(path).name))
     out, pretty, shapes = _paths(project_dir)
     pretty.mkdir(parents=True, exist_ok=True)
 
@@ -450,13 +466,31 @@ def import_cad_files(path, project_dir, attach_to=None, mpn=""):
     lib_path = str(out) + ".kicad_sym"
     for name, block, version in syms:
         def fp_ref(m):
-            ref = m.group(2).split(":")[-1]
-            if ref not in fp_names and len(fp_names) == 1:
+            ref = footprint or m.group(2).split(":")[-1]
+            if not footprint and ref not in fp_names and len(fp_names) == 1:
                 ref = fp_names[0]
             return '%s"%s"' % (m.group(1), LIB + ":" + ref if ref else "")
 
         _put_symbol(lib_path, name, re.sub(r'(\(property\s+"Footprint"\s+)"([^"]*)"', fp_ref, block, count=1), version)
-    return [n for n, _, _ in syms], fp_names, models
+    names = [n for n, _, _ in syms]
+    if replace and names and replace not in names:
+        _drop_symbol(lib_path, replace)
+    return names, fp_names, models
+
+
+def pin_mismatch(project_dir, symbol, footprint):
+    """Symbol pin numbers that have no pad on the footprint (empty when they line up)."""
+    out, pretty, _ = _paths(project_dir)
+    try:
+        sym = Path(str(out) + ".kicad_sym").read_text(encoding="utf-8")
+        fp = (pretty / (footprint + ".kicad_mod")).read_text(encoding="utf-8")
+    except OSError:
+        return []
+    block = next((b for b in _top_level(sym, "symbol") if re.match(r'\(symbol\s+"%s"' % re.escape(symbol), b)), "")
+    pins = set(re.findall(r'\(number\s+"([^"]*)"', block))
+    pads = set(re.findall(r'\(pad\s+(?:"([^"]*)"|([^\s()]+))', fp))
+    pads = {a or b for a, b in pads}
+    return sorted(pins - pads)
 
 
 def remove_parts(project_dir, patterns):
@@ -543,16 +577,18 @@ def run_import(info, project_dir, api):
     return row
 
 
-def run_file_import(path, info, project_dir, attach_to=None):
+def run_file_import(path, info, project_dir, attach_to=None, symbols_only=False, footprint="", replace=""):
     """Import a downloaded zip/folder/file. Returns (symbols, footprints, models)."""
-    symbols, footprints, models = import_cad_files(path, project_dir, attach_to, (info or {}).get("mpn", ""))
+    symbols, footprints, models = import_cad_files(path, project_dir, attach_to, (info or {}).get("mpn", ""),
+                                                   symbols_only, footprint, replace)
     add_lib_tables(project_dir)
     if symbols or footprints:
         mpn = (info or {}).get("mpn") or (symbols or footprints)[0]
         mpn = next((s for s in symbols if _norm(s) == _norm(mpn)), mpn)  # DigiKey URLs turn # into -
         upsert_csv(project_dir, dict(info or {}, mpn=mpn,
                                      symbol=" ".join(LIB + ":" + s for s in symbols),
-                                     footprint=" ".join(LIB + ":" + f for f in footprints), imported_at=_now()))
+                                     footprint=" ".join(LIB + ":" + f for f in footprints or [footprint] if f),
+                                     imported_at=_now()))
     return symbols, footprints, models
 
 
@@ -579,6 +615,22 @@ except ImportError:
     pcbnew = None
 
 DOWNLOADS = Path.home() / "Downloads"
+SETTINGS = Path.home() / ".config" / "kicad-importer" / "settings.json"
+
+
+def _settings():
+    try:
+        return json.loads(SETTINGS.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+def _save_setting(key, value):
+    try:
+        SETTINGS.parent.mkdir(parents=True, exist_ok=True)
+        SETTINGS.write_text(json.dumps(dict(_settings(), **{key: value}), indent=2), encoding="utf-8")
+    except OSError:
+        pass
 
 
 def _short(names, n=5):
@@ -603,8 +655,12 @@ if wx:
             row.Add(self.link, 1, wx.EXPAND | wx.RIGHT, 5)
             row.Add(button, 0, wx.RIGHT, 5)
             row.Add(zip_button)
+            self.prefer = wx.CheckBox(self, label="Use DigiKey symbols (Ultra Librarian / SnapMagic), LCSC for footprint and 3D")
+            self.prefer.SetValue(bool(_settings().get("digikey_symbols")))
+            self.prefer.Bind(wx.EVT_CHECKBOX, lambda e: _save_setting("digikey_symbols", self.prefer.GetValue()))
             box = wx.BoxSizer(wx.VERTICAL)
             box.Add(row, 0, wx.EXPAND | wx.ALL, 8)
+            box.Add(self.prefer, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
             box.Add(self.out, 1, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 8)
             self.SetSizer(box)
             button.Bind(wx.EVT_BUTTON, self.on_import)
@@ -662,6 +718,10 @@ if wx:
                 self.say("Done: %s / %s" % (row["symbol"], row["footprint"]))
                 self.say("3D: " + (", ".join(row["models"]) or "none, EasyEDA has no model or the download failed"))
                 self.link.SetValue("")
+                if self.prefer.GetValue():
+                    info["mpn"] = row["mpn"]
+                    self.start_watch(info, swap=dict(footprint=row["footprint"].split(":", 1)[1],
+                                                     replace=row["symbol"].split(":", 1)[1]))
             except Exception as e:
                 self.say("Error: %s" % e)
 
@@ -677,6 +737,18 @@ if wx:
 
         def import_file(self, path, info):
             try:
+                swap = self.watch and self.watch.get("swap")
+                if swap:
+                    symbols, _, _ = run_file_import(path, info, self.project_dir, None, True, swap["footprint"], swap["replace"])
+                    self.say("Swapped in the DigiKey symbol: %s (footprint stays %s:%s)"
+                             % (_short(symbols), LIB, swap["footprint"]))
+                    for sym in symbols:
+                        bad = pin_mismatch(self.project_dir, sym, swap["footprint"])
+                        if bad:
+                            self.say("  WARNING: %s has pins %s that don't exist on %s. Check the pinout before using it."
+                                     % (sym, ", ".join(bad), swap["footprint"]))
+                    self.stop_watch()
+                    return True
                 attach = self.watch and self.watch.get("footprint")
                 symbols, footprints, models = run_file_import(path, info, self.project_dir, attach)
                 self.say("Imported %s" % os.path.basename(path))
@@ -698,19 +770,24 @@ if wx:
 
         # --- browser downloads ---
 
-        def start_watch(self, info):
+        def start_watch(self, info, swap=None):
             if not info.get("cad_url") and info["mpn"] and _digikey_creds():
                 self.say("Asking DigiKey for the part's CAD models page...")
                 info["cad_url"] = digikey_models_url(info["mpn"])
-            url = (info.get("cad_url") or info["url"]
+            url = (info.get("cad_url") or (info["url"] if not swap or info["source"] == "digikey" else "")
                    or "https://www.digikey.com/en/products/result?keywords=" + quote(info["mpn"] or info["lcsc_id"]))
-            self.watch = dict(info=info, since=time.time() - 2, seen={}, done=set(), footprint=None, step=None)
-            self.fetch_step(info)
+            self.watch = dict(info=info, since=time.time() - 2, seen={}, done=set(), footprint=None, step=None, swap=swap)
+            if not swap:
+                self.fetch_step(info)
             self.say("Opening %s" % url)
-            self.say(("Pick a tab (Ultra Librarian, SnapMagic, Manufacturer Provided), choose KiCad or STEP and hit Download. "
+            if swap:
+                self.say("Download the KiCad (V6 and later) format from SnapMagic or Ultra Librarian. "
+                         "I'll swap its symbol in and keep LCSC's footprint and 3D model. Waiting 10 minutes.")
+            else:
+                self.say(("Pick a tab (Ultra Librarian, SnapMagic, Manufacturer Provided), choose KiCad or STEP and hit Download. "
                       if info.get("cad_url") else
                       "Click EDA/CAD Models, then download the KiCad files and/or the STEP. ")
-                     + "I'll import whatever lands in Downloads for the next 10 minutes.")
+                         + "I'll import whatever lands in Downloads for the next 10 minutes.")
             wx.LaunchDefaultBrowser(url)
             self.timer.Start(1000)
 
