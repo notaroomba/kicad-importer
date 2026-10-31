@@ -3,6 +3,9 @@ name: release
 on:
   push:
     tags: ["v*"]
+    # bumping the version in metadata.json on main also releases it
+    branches: [main]
+    paths: [metadata.json, .github/workflows/release.yml]
 
 permissions:
   contents: write
@@ -13,9 +16,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build PCM package
+      - name: Pick tag
+        id: tag
         env:
-          TAG: ${{ github.ref_name }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ "$GITHUB_REF_TYPE" = tag ]; then tag="$GITHUB_REF_NAME"
+          else tag="v$(python3 -c 'import json; print(json.load(open("metadata.json"))["versions"][0]["version"])')"; fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          if gh release view "$tag" >/dev/null 2>&1; then echo "exists=1" >> "$GITHUB_OUTPUT"; fi
+
+      - name: Build PCM package
+        if: ${{ !steps.tag.outputs.exists }}
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
           REPO: ${{ github.repository }}
         run: |
           python3 - <<'PY'
@@ -61,6 +75,8 @@ jobs:
           PY
 
       - name: Create release
+        if: ${{ !steps.tag.outputs.exists }}
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "${{ github.ref_name }}" dist/*.zip dist/*.json --title "${{ github.ref_name }}" --generate-notes
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: gh release create "$TAG" dist/*.zip dist/*.json --target "$GITHUB_SHA" --title "$TAG" --generate-notes
