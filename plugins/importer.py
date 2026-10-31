@@ -252,10 +252,19 @@ def _put_symbol(lib_path, name, block, version):
     path.write_text(text, encoding="utf-8")
 
 
-def import_cad_files(path, project_dir, attach_to=None):
+def _is_part(name, mpn):
+    """Does a symbol/footprint name belong to this MPN? Vendor libs use names like 4818_744042100."""
+    m = _norm(mpn).replace("_", "")
+    toks = re.split(r"[_ ]", name)
+    return bool(m) and any(_norm("".join(toks[i:])) == m for i in range(len(toks)))
+
+
+def import_cad_files(path, project_dir, attach_to=None, mpn=""):
     """Import symbols, footprints and 3D models from a downloaded zip/folder/file.
 
-    A file with only a 3D model gets attached to the footprint named attach_to.
+    Vendor zips can hold a whole part family. With an mpn, only that part's symbol
+    plus the footprint and 3D model it uses get imported. A file with only a 3D
+    model gets attached to the footprint named attach_to.
     Returns (symbols, footprints, models).
     """
     files = read_cad_files(path)
@@ -265,23 +274,39 @@ def import_cad_files(path, project_dir, attach_to=None):
     out, pretty, shapes = _paths(project_dir)
     pretty.mkdir(parents=True, exist_ok=True)
 
+    syms = []  # (name, block, version)
+    for name in sorted(n for n in files if n.lower().endswith(".kicad_sym")):
+        text = files[name].decode("utf-8", errors="replace")
+        version = int((re.search(r"\(version\s+(\d+)\)", text) or [0, 0])[1])
+        for block in _top_level(text, "symbol"):
+            syms.append((re.match(r'\(symbol\s+"([^"]+)"', block).group(1), block, version))
+    fp_names = sorted(n[:-len(".kicad_mod")] for n in files if n.lower().endswith(".kicad_mod"))
+
+    def fp_of(block):
+        m = re.search(r'\(property\s+"Footprint"\s+"([^"]*)"', block)
+        return m.group(1).split(":")[-1] if m else ""
+
+    if mpn and len(syms) > 1:
+        keep = {n for n, _, _ in syms if _is_part(n, mpn)}
+        for n, block, _ in syms:  # derived symbols need their parent
+            if n in keep:
+                keep.update(re.findall(r'\(extends\s+"([^"]+)"', block))
+        if keep:
+            syms = [x for x in syms if x[0] in keep]
+    if mpn and len(fp_names) > 1:
+        wanted = [f for f in fp_names if f in {fp_of(b) for _, b, _ in syms}] or [f for f in fp_names if _is_part(f, mpn)]
+        fp_names = wanted or fp_names
+
     models = sorted(n for n in files if n.lower().endswith(MODEL_EXTS))
-    # prefer STEP over WRL from these sources, WRL only if there's no STEP
-    best = [m for m in models if not m.lower().endswith(".wrl")] or models
-    if models:
-        shapes.mkdir(parents=True, exist_ok=True)
-        for m in models:
-            (shapes / m).write_bytes(files[m])
-            _fix_wrl(shapes / m)
+    best = [m for m in models if not m.lower().endswith(".wrl")] or models  # prefer STEP
 
     def pick_model(ref=""):
         base = Path(ref.replace("\\", "/")).name
-        for m in models:
-            if m == base:
-                return m
+        if base in models:
+            return base
         stem = Path(base).stem.lower()
         same = [m for m in best if Path(m).stem.lower() == stem]
-        return (same or best or [None])[0]
+        return (same or (best if len(best) == 1 or not fp_names else []) or [None])[0]
 
     def with_model(text, ref_name):
         if re.search(r"\(model\s", text):
@@ -296,36 +321,76 @@ def import_cad_files(path, project_dir, attach_to=None):
         return (text[:end].rstrip() + '\n  (model "%s/%s"\n    (offset (xyz 0 0 0)) (scale (xyz 1 1 1)) (rotate (xyz 0 0 0)))\n)\n'
                 % (MODEL_DIR, m))
 
-    footprints = []
-    for name in sorted(n for n in files if n.lower().endswith(".kicad_mod")):
-        stem = name[:-len(".kicad_mod")]
-        text = with_model(files[name].decode("utf-8", errors="replace"), stem)
-        (pretty / name).write_text(text, encoding="utf-8")
-        footprints.append(stem)
+    used = set()
+    for stem in fp_names:
+        text = with_model(files[stem + ".kicad_mod"].decode("utf-8", errors="replace"), stem)
+        used.update(Path(m).name for m in re.findall(r'\(model\s+"([^"]+)"', text))
+        (pretty / (stem + ".kicad_mod")).write_text(text, encoding="utf-8")
 
-    symbols = []
-    lib_path = str(out) + ".kicad_sym"
-    for name in sorted(n for n in files if n.lower().endswith(".kicad_sym")):
-        text = files[name].decode("utf-8", errors="replace")
-        version = int((re.search(r"\(version\s+(\d+)\)", text) or [0, 0])[1])
-        for block in _top_level(text, "symbol"):
-            sym = re.match(r'\(symbol\s+"([^"]+)"', block).group(1)
-
-            def fp_ref(m):
-                ref = m.group(2).split(":")[-1]
-                if ref not in footprints and len(footprints) == 1:
-                    ref = footprints[0]
-                return '%s"%s"' % (m.group(1), LIB + ":" + ref if ref else "")
-
-            block = re.sub(r'(\(property\s+"Footprint"\s+)"([^"]*)"', fp_ref, block, count=1)
-            _put_symbol(lib_path, sym, block, version)
-            symbols.append(sym)
-
-    if attach_to and models and not footprints:
+    if attach_to and models and not fp_names:
         fp_path = pretty / (attach_to + ".kicad_mod")
         if fp_path.is_file():
-            fp_path.write_text(with_model(fp_path.read_text(encoding="utf-8"), attach_to), encoding="utf-8")
-    return symbols, footprints, models
+            text = with_model(fp_path.read_text(encoding="utf-8"), attach_to)
+            used.update(Path(m).name for m in re.findall(r'\(model\s+"([^"]+)"', text))
+            fp_path.write_text(text, encoding="utf-8")
+
+    models = [m for m in models if m in used or not fp_names and not attach_to]
+    if models:
+        shapes.mkdir(parents=True, exist_ok=True)
+        for m in models:
+            (shapes / m).write_bytes(files[m])
+            _fix_wrl(shapes / m)
+
+    lib_path = str(out) + ".kicad_sym"
+    for name, block, version in syms:
+        def fp_ref(m):
+            ref = m.group(2).split(":")[-1]
+            if ref not in fp_names and len(fp_names) == 1:
+                ref = fp_names[0]
+            return '%s"%s"' % (m.group(1), LIB + ":" + ref if ref else "")
+
+        _put_symbol(lib_path, name, re.sub(r'(\(property\s+"Footprint"\s+)"([^"]*)"', fp_ref, block, count=1), version)
+    return [n for n, _, _ in syms], fp_names, models
+
+
+def remove_parts(project_dir, patterns):
+    """Remove symbols matching glob patterns, then footprints/3D models/CSV rows nothing uses anymore."""
+    import fnmatch
+    out, pretty, shapes = _paths(project_dir)
+    lib_path = Path(str(out) + ".kicad_sym")
+    text = lib_path.read_text(encoding="utf-8") if lib_path.is_file() else ""
+    removed = []
+    for block in _top_level(text, "symbol"):
+        name = re.match(r'\(symbol\s+"([^"]+)"', block).group(1)
+        if any(fnmatch.fnmatchcase(name, p) for p in patterns):
+            text = re.sub(r"\n[ \t]*" + re.escape(block), "", text, count=1)
+            removed.append(name)
+    if removed:
+        lib_path.write_text(text, encoding="utf-8")
+    kept = set(re.findall(r'\(property\s+"Footprint"\s+"%s:([^"]*)"' % LIB, text))
+    gone_fps = [f for f in pretty.glob("*.kicad_mod") if f.stem not in kept] if pretty.is_dir() else []
+    for f in gone_fps:
+        f.unlink()
+    used = set()
+    for f in pretty.glob("*.kicad_mod") if pretty.is_dir() else []:
+        used.update(Path(m).name for m in re.findall(r'\(model\s+"([^"]+)"', f.read_text(encoding="utf-8")))
+    used = {Path(u).stem for u in used}  # a .step next to a referenced .wrl stays
+    gone_models = [m for m in shapes.glob("*") if m.stem not in used] if shapes.is_dir() else []
+    for m in gone_models:
+        m.unlink()
+    csv_path = Path(str(out) + ".csv")
+    if csv_path.is_file():
+        symbols = {re.match(r'\(symbol\s+"([^"]+)"', b).group(1) for b in _top_level(text, "symbol")}
+        with open(csv_path, newline="", encoding="utf-8") as f:
+            rows = list(csv.DictReader(f))
+        for r in rows:
+            r["symbol"] = " ".join(x for x in r["symbol"].split() if x.split(":")[-1] in symbols)
+            r["footprint"] = " ".join(x for x in r["footprint"].split() if x.split(":")[-1] in kept)
+        with open(csv_path, "w", newline="", encoding="utf-8") as f:
+            w = csv.DictWriter(f, fieldnames=CSV_FIELDS, extrasaction="ignore")
+            w.writeheader()
+            w.writerows(r for r in rows if r["symbol"] or r["footprint"])
+    return removed, [f.stem for f in gone_fps], [m.name for m in gone_models]
 
 
 def add_lib_tables(project_dir):
@@ -374,7 +439,7 @@ def run_import(info, project_dir, api):
 
 def run_file_import(path, info, project_dir, attach_to=None):
     """Import a downloaded zip/folder/file. Returns (symbols, footprints, models)."""
-    symbols, footprints, models = import_cad_files(path, project_dir, attach_to)
+    symbols, footprints, models = import_cad_files(path, project_dir, attach_to, (info or {}).get("mpn", ""))
     add_lib_tables(project_dir)
     if symbols or footprints:
         mpn = (info or {}).get("mpn") or (symbols or footprints)[0]
@@ -407,6 +472,10 @@ except ImportError:
     pcbnew = None
 
 DOWNLOADS = Path.home() / "Downloads"
+
+
+def _short(names, n=5):
+    return ", ".join(names[:n]) + (" and %d more" % (len(names) - n) if len(names) > n else "")
 PARTIAL = (".crdownload", ".download", ".part", ".tmp")
 
 if wx:
@@ -503,9 +572,9 @@ if wx:
                 symbols, footprints, models = run_file_import(path, info, self.project_dir, attach)
                 self.say("Imported %s" % os.path.basename(path))
                 if symbols:
-                    self.say("  symbols: " + ", ".join(symbols))
+                    self.say("  symbols: " + _short(symbols))
                 if footprints:
-                    self.say("  footprints: " + ", ".join(footprints))
+                    self.say("  footprints: " + _short(footprints))
                     if self.watch:
                         self.watch["footprint"] = footprints[0]
                 if models:
@@ -593,13 +662,21 @@ def cli(argv):
     ap = argparse.ArgumentParser(prog="python3 -m plugins.importer", description=cli.__doc__)
     ap.add_argument("links", nargs="+")
     ap.add_argument("--project", default=".", help="KiCad project folder (default: current folder)")
+    ap.add_argument("--mpn", default="", help="for downloaded zips: only import this part, not the whole family")
+    ap.add_argument("--remove", action="store_true",
+                    help="remove symbols matching the given names/globs (e.g. '2828_*'), plus footprints and 3D models nothing uses anymore")
     args = ap.parse_args(argv)
     logging.basicConfig(level=logging.WARNING, format="%(message)s")
+    if args.remove:
+        symbols, footprints, models = remove_parts(args.project, args.links)
+        print("removed %d symbols, %d footprints, %d 3D models" % (len(symbols), len(footprints), len(models)))
+        return 0
     api, failed = EasyedaApi(), 0
     for link in args.links:
         try:
             if os.path.exists(link):
-                symbols, footprints, models = run_file_import(link, None, args.project)
+                info = dict(source="file", url="", mpn=args.mpn, lcsc_id="") if args.mpn else None
+                symbols, footprints, models = run_file_import(link, info, args.project)
                 print("%s -> symbols: %s, footprints: %s, 3D: %s" % (link, ", ".join(symbols) or "none",
                                                                      ", ".join(footprints) or "none", ", ".join(models) or "none"))
                 continue
@@ -652,6 +729,9 @@ def self_check():
     check("https://www.digikey.ca/en/products/detail/analog-devices-inc/LT1618EDD-TRPBF/960480?s=x",
           cad_url="https://www.digikey.ca/en/models/960480")
     assert _norm("LT1618EDD-TRPBF") == _norm("LT1618EDD#TRPBF")
+    assert _is_part("4818_744042100", "744042100") and _is_part("LT1618EDD_TRPBF", "LT1618EDD#TRPBF")
+    assert not _is_part("4818_744042101", "744042100") and not _is_part("1744042100", "744042100")
+    assert not _is_part("2828_74402500030", "744042100")
     for bad in ("https://example.com/foo", "https://www.digikey.com/en/products", ""):
         try:
             parse_link(bad)

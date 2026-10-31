@@ -84,6 +84,8 @@ I didn't make it log in and scrape those sites for you. They don't have a public
 
 If you saved a download somewhere else, use the "Import file..." button and pick it.
 
+Some downloads are a whole part family (Würth's zip for 744042100 has every WE-TPC inductor in it). The plugin only takes the part you asked for, plus the footprint and 3D model it uses.
+
 If EasyEDA starts saying it's refusing requests, that's their rate limit. Wait a few minutes and try again.
 
 ## Using it without KiCad
@@ -94,7 +96,13 @@ You can also run it from a terminal with plain Python 3.9+, no KiCad and no extr
 python3 -m plugins.importer C2040 595-LM358DR ~/Downloads/ul_LT1618.zip --project ~/my-project
 ```
 
-It does the same thing as the button: same library, same lib tables, same `parts.csv`. You can pass downloaded zips or files too. If a distributor link has no exact LCSC match it prints the closest ones and you rerun it with the C number you want. Leave out `--project` and it uses the folder you're in. Running it with no arguments just runs the link parser self-check.
+It does the same thing as the button: same library, same lib tables, same `parts.csv`. You can pass downloaded zips or files too, add `--mpn 744042100` to only take that part out of a family zip. If a distributor link has no exact LCSC match it prints the closest ones and you rerun it with the C number you want. Leave out `--project` and it uses the folder you're in. Running it with no arguments just runs the link parser self-check.
+
+To throw parts out of the library again, use `--remove` with symbol names or patterns. It also deletes the footprints, 3D models and `parts.csv` rows nothing uses anymore:
+
+```
+python3 -m plugins.importer --remove '2828_*' '4818_*' --project ~/my-project
+```
 
 ## Folder layout
 
