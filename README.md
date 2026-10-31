@@ -4,10 +4,12 @@ A KiCad 9/10 plugin I made because I got tired of downloading zips, unzipping th
 
 ## What it does
 
-- Takes an LCSC, JLCPCB, DigiKey, Mouser or Newark/Farnell/element14 link, or just an LCSC number like `C2040`
-- For DigiKey/Mouser/Newark links it pulls the manufacturer part number out of the URL and looks it up on LCSC
-- It only auto-imports when the LCSC part number matches exactly (case, dashes, slashes and spaces don't count). If there's no exact match it shows you the closest hits and you pick one, or cancel. I added that because searching `LM358DR` gives you `XL358D` as the top result, which is not the same chip
+- Takes an LCSC, JLCPCB, DigiKey, Mouser or Newark/Farnell/element14 link, or a part number: LCSC (`C2040`), DigiKey (`505-LT1618EDD#TRPBFCT-ND`), Mouser (`595-LM358DR`) or just the manufacturer part number
+- For anything that isn't LCSC it figures out the manufacturer part number and looks it up on LCSC
+- It only auto-imports when the LCSC part number matches exactly (case, dashes, slashes, `#` and spaces don't count). If there's no exact match it shows you the closest hits and you pick one, or cancel. I added that because searching `LM358DR` gives you `XL358D` as the top result, which is not the same chip
 - Grabs the symbol, footprint and 3D model through [easyeda2kicad.py](https://github.com/uPesy/easyeda2kicad.py)
+- If LCSC doesn't have the part (or EasyEDA has no CAD for it), it opens the distributor page in your browser and imports whatever you download from there: Ultra Librarian or SnapMagic zips, the manufacturer's STEP file, loose `.kicad_sym`/`.kicad_mod` files
+- Button in the PCB editor (KiCad 9 and 10) and in the schematic editor (KiCad 10)
 - Puts everything in one library per project and adds it to the project's lib tables for you
 - Keeps a `parts.csv` so you know where each part came from
 
@@ -39,14 +41,19 @@ When I put out a new release, KiCad will show it as an update.
 
 Either way, restart the PCB editor if the button doesn't show up.
 
+### Schematic editor button (KiCad 10)
+
+The schematic editor button uses KiCad's newer plugin API, so you have to turn that on once: Preferences > Plugins > check "Enable KiCad API", then restart KiCad. The Plugin Manager asks you about this when you install. The button shows up in the schematic editor's top toolbar. If it doesn't, try Tools > Refresh Plugins. KiCad 9 only has the PCB editor button.
+
 ## Usage
 
-1. Open your board in the PCB editor (save it first, the plugin uses the board's folder as the project folder)
-2. Click the Part Importer button in the toolbar, or go to Tools > External Plugins > Part Importer
-3. Paste a link or an LCSC number and hit Import
-4. Watch the log. When it says Done, the part is in the `parts` library in the schematic editor and footprint browser
+1. Click the Part Importer button (the chip with the green arrow). In the PCB editor it's also under Tools > External Plugins > Part Importer. Save the board first, the plugin uses its folder as the project folder
+2. Paste a link or a part number and hit Import
+3. Watch the log. When it says Done, the part is in the `parts` library in the schematic editor and footprint browser
 
-Links that work:
+If KiCad doesn't show the `parts` library right after your first import, close and reopen the project. KiCad 10 has no way for a plugin to make it reload the library list.
+
+Stuff that works:
 
 ```
 C2040
@@ -56,19 +63,38 @@ https://www.digikey.com/en/products/detail/stmicroelectronics/STM32F405RGT6/2754
 https://www.mouser.com/ProductDetail/Texas-Instruments/LM358DR?qs=...
 https://www.mouser.com/ProductDetail/595-LM358DR
 https://www.newark.com/stmicroelectronics/stm32f405rgt6/32-bit-microcontroller-advanced/dp/71T9854
+505-LT1618EDD#TRPBFCT-ND     (DigiKey part number)
+595-LM358DR                  (Mouser part number)
+LT1618EDD#TRPBF              (manufacturer part number)
 ```
 
 Other country sites (digikey.de, mouser.co.uk, uk.farnell.com, etc.) work too.
+
+Some DigiKey part numbers, like Würth's `732-1025-1-ND`, don't have the manufacturer part number in them at all. Those end up in the browser flow below, so pasting the product link is better.
+
+### When LCSC doesn't have it
+
+If there's no exact match on LCSC, the pick list has an extra first option, "Get CAD files from the distributor in my browser instead". It also goes there by itself when LCSC has the part but EasyEDA has no CAD data for it.
+
+1. The plugin opens the product page in your browser
+2. Click EDA/CAD Models and download what you want: Ultra Librarian or SnapMagic (pick the KiCad format, they make you log in the first time), and/or the Manufacturer Provided STEP file
+3. The plugin watches your Downloads folder for 10 minutes and imports each file as it lands. A manufacturer STEP on its own gets attached to the footprint you just imported
+
+I didn't make it log in and scrape those sites for you. They don't have a public API, they block bots, and it would break every time they change their site. One click in your own browser is way more reliable.
+
+If you saved a download somewhere else, use the "Import file..." button and pick it.
+
+If EasyEDA starts saying it's refusing requests, that's their rate limit. Wait a few minutes and try again.
 
 ## Using it without KiCad
 
 You can also run it from a terminal with plain Python 3.9+, no KiCad and no extra packages. Clone the repo and run it from the repo folder:
 
 ```
-python3 -m plugins.importer C2040 https://www.digikey.com/en/products/detail/stmicroelectronics/STM32F405RGT6/2754208 --project ~/my-project
+python3 -m plugins.importer C2040 595-LM358DR ~/Downloads/ul_LT1618.zip --project ~/my-project
 ```
 
-It does the same thing as the button: same library, same lib tables, same `parts.csv`. If a distributor link has no exact LCSC match it prints the closest ones and you rerun it with the C number you want. Leave out `--project` and it uses the folder you're in. Running it with no arguments just runs the link parser self-check.
+It does the same thing as the button: same library, same lib tables, same `parts.csv`. You can pass downloaded zips or files too. If a distributor link has no exact LCSC match it prints the closest ones and you rerun it with the C number you want. Leave out `--project` and it uses the folder you're in. Running it with no arguments just runs the link parser self-check.
 
 ## Folder layout
 
@@ -90,14 +116,14 @@ Paths use `${KIPRJMOD}`, so you can move the project around or commit it to git 
 
 ## parts.csv
 
-One row per LCSC part, with these columns:
+One row per part, with these columns:
 
 | column | what it is |
 | --- | --- |
-| source | lcsc, digikey, mouser, newark, farnell or element14 |
+| source | lcsc, digikey, mouser, newark, farnell, element14, or mpn for a bare part number |
 | url | the link you pasted (empty for a bare LCSC number) |
 | mpn | manufacturer part number |
-| lcsc_id | LCSC number, this is the key, reimporting replaces the row |
+| lcsc_id | LCSC number, empty for parts that came from a download. Reimporting replaces the row (matched on LCSC number, or the MPN when there isn't one) |
 | symbol | `parts:<symbol>` |
 | footprint | `parts:<footprint>` |
 | imported_at | UTC timestamp |

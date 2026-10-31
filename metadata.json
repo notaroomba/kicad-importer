@@ -1,8 +1,8 @@
 {
   "$schema": "https://go.kicad.org/pcm/schemas/v1",
   "name": "Part Importer",
-  "description": "Import parts from LCSC, JLCPCB, DigiKey, Mouser and Newark links",
-  "description_full": "Paste a part link (LCSC, JLCPCB, DigiKey, Mouser, Newark/Farnell/element14) or an LCSC number and get the symbol, footprint and 3D model in a project-local library at lib/parts. Distributor links are matched to LCSC by exact part number. Built on easyeda2kicad.py by uPesy. Licensed AGPL-3.0.",
+  "description": "Import parts from LCSC, JLCPCB, DigiKey, Mouser and Newark links or part numbers",
+  "description_full": "Paste a part link or part number (LCSC, JLCPCB, DigiKey, Mouser, Newark/Farnell/element14, or a manufacturer part number) and get the symbol, footprint and 3D model in a project-local library at lib/parts. Distributor parts are matched to LCSC by exact part number. If LCSC doesn't have it, the plugin opens the distributor's CAD models page and imports the Ultra Librarian, SnapMagic or manufacturer files you download. Buttons in the PCB editor (KiCad 9/10) and the schematic editor (KiCad 10, needs the KiCad API enabled). Built on easyeda2kicad.py by uPesy. Licensed AGPL-3.0.",
   "identifier": "com.github.notaroomba.kicad-importer",
   "type": "plugin",
   "author": {
@@ -15,12 +15,20 @@
   "resources": {
     "homepage": "https://github.com/notaroomba/kicad-importer"
   },
-  "tags": ["library", "lcsc", "jlcpcb", "digikey", "mouser", "easyeda"],
+  "tags": [
+    "library",
+    "lcsc",
+    "jlcpcb",
+    "digikey",
+    "mouser",
+    "easyeda"
+  ],
   "versions": [
     {
-      "version": "0.1.0",
+      "version": "0.2.0",
       "status": "testing",
-      "kicad_version": "9.0"
+      "kicad_version": "9.0",
+      "runtime": "ipc"
     }
   ]
 }

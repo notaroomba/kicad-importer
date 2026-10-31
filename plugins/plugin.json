@@ -1,0 +1,22 @@
+{
+  "$schema": "https://go.kicad.org/api/schemas/v1",
+  "identifier": "com.github.notaroomba.kicad-importer",
+  "name": "Part Importer",
+  "description": "Import a part from an LCSC, DigiKey, Mouser or Newark link or part number",
+  "runtime": {
+    "type": "python",
+    "min_version": "3.9"
+  },
+  "actions": [
+    {
+      "identifier": "import-part",
+      "name": "Part Importer",
+      "description": "Import a part from an LCSC, DigiKey, Mouser or Newark link or part number",
+      "show-button": true,
+      "scopes": ["schematic"],
+      "entrypoint": "ipc_main.py",
+      "icons-light": ["icon.png", "icon_48.png"],
+      "icons-dark": ["icon.png", "icon_48.png"]
+    }
+  ]
+}
