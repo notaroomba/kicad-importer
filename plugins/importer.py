@@ -69,12 +69,15 @@ def parse_link(text):
         if ids:
             return dict(source="lcsc", url=text, mpn="", lcsc_id=ids[-1].upper())
     elif site("digikey"):
+        # the trailing number is DigiKey's product id, its CAD models live at /en/models/<id>
+        pid = parts[-1] if parts[-1].isdigit() else ""
+        cad = "https://%s/en/models/%s" % (host, pid) if pid else ""
         # /en/products/detail/<mfr>/<mpn>/<id>
         if "detail" in low and low.index("detail") + 2 < len(parts):
-            return dict(source="digikey", url=text, mpn=parts[low.index("detail") + 2], lcsc_id="")
+            return dict(source="digikey", url=text, mpn=parts[low.index("detail") + 2], lcsc_id="", cad_url=cad)
         # old format: /product-detail/en/<mfr>/<mpn>/<dk-pn>/<id>
         if "product-detail" in low and low.index("product-detail") + 3 < len(parts):
-            return dict(source="digikey", url=text, mpn=parts[low.index("product-detail") + 3], lcsc_id="")
+            return dict(source="digikey", url=text, mpn=parts[low.index("product-detail") + 3], lcsc_id="", cad_url=cad)
     elif site("mouser"):
         # /ProductDetail/<mfr>/<mpn>?qs=...  or  /ProductDetail/595-LM358DR
         if "productdetail" in low:
@@ -515,11 +518,14 @@ if wx:
         # --- browser downloads ---
 
         def start_watch(self, info):
-            url = info["url"] or "https://www.digikey.com/en/products/result?keywords=" + quote(info["mpn"] or info["lcsc_id"])
+            url = (info.get("cad_url") or info["url"]
+                   or "https://www.digikey.com/en/products/result?keywords=" + quote(info["mpn"] or info["lcsc_id"]))
             self.watch = dict(info=info, since=time.time() - 2, seen={}, done=set(), footprint=None)
             self.say("Opening %s" % url)
-            self.say("Click EDA/CAD Models, then download from Ultra Librarian / SnapMagic (KiCad format) "
-                     "and/or the manufacturer's STEP. I'll import whatever lands in Downloads for the next 10 minutes.")
+            self.say(("Pick a tab (Ultra Librarian, SnapMagic, Manufacturer Provided), choose KiCad or STEP and hit Download. "
+                      if info.get("cad_url") else
+                      "Click EDA/CAD Models, then download the KiCad files and/or the STEP. ")
+                     + "I'll import whatever lands in Downloads for the next 10 minutes.")
             wx.LaunchDefaultBrowser(url)
             self.timer.Start(1000)
 
@@ -641,7 +647,10 @@ def self_check():
     check("296-1395-1-ND", source="digikey")
     check("595-LM358DR", source="mouser", mpn="LM358DR")
     check("LT1618EDD#TRPBF", source="mpn", mpn="LT1618EDD#TRPBF")
-    check("https://www.digikey.com/en/products/detail/w%C3%BCrth-elektronik/744042100/1638429", mpn="744042100")
+    check("https://www.digikey.com/en/products/detail/w%C3%BCrth-elektronik/744042100/1638429", mpn="744042100",
+          cad_url="https://www.digikey.com/en/models/1638429")
+    check("https://www.digikey.ca/en/products/detail/analog-devices-inc/LT1618EDD-TRPBF/960480?s=x",
+          cad_url="https://www.digikey.ca/en/models/960480")
     assert _norm("LT1618EDD-TRPBF") == _norm("LT1618EDD#TRPBF")
     for bad in ("https://example.com/foo", "https://www.digikey.com/en/products", ""):
         try:

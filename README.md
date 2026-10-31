@@ -76,8 +76,8 @@ Some DigiKey part numbers, like Würth's `732-1025-1-ND`, don't have the manufac
 
 If there's no exact match on LCSC, the pick list has an extra first option, "Get CAD files from the distributor in my browser instead". It also goes there by itself when LCSC has the part but EasyEDA has no CAD data for it.
 
-1. The plugin opens the product page in your browser
-2. Click EDA/CAD Models and download what you want: Ultra Librarian or SnapMagic (pick the KiCad format, they make you log in the first time), and/or the Manufacturer Provided STEP file
+1. The plugin opens the part's CAD models page in your browser. For a DigiKey link that's DigiKey's own models page (`digikey.com/en/models/<id>`), for others it's the product page where you click EDA/CAD Models
+2. Pick a tab (Ultra Librarian, SnapMagic, Manufacturer Provided), choose KiCad (or STEP for just the 3D model) and hit Download
 3. The plugin watches your Downloads folder for 10 minutes and imports each file as it lands. A manufacturer STEP on its own gets attached to the footprint you just imported
 
 I didn't make it log in and scrape those sites for you. They don't have a public API, they block bots, and it would break every time they change their site. One click in your own browser is way more reliable.
