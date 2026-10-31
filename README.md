@@ -13,12 +13,31 @@ A KiCad 9/10 plugin I made because I got tired of downloading zips, unzipping th
 
 ## Install
 
-1. Grab `kicad-importer-<version>.zip` from the [releases page](https://github.com/notaroomba/kicad-importer/releases)
-2. In KiCad open the Plugin and Content Manager
-3. Click "Install from File..." and pick the zip
-4. Restart the PCB editor if the button doesn't show up
+### Option 1: add my repo to KiCad (easiest, and you get updates)
 
-Don't unzip it, KiCad wants the zip as is.
+1. In KiCad open the Plugin and Content Manager
+2. Click "Manage..." next to the repository dropdown, then "+" to add one
+3. Paste this URL:
+   ```
+   https://github.com/notaroomba/kicad-importer/releases/latest/download/repository.json
+   ```
+4. Pick it in the repository dropdown, find Part Importer, click Install, then Apply Pending Changes
+
+When I put out a new release, KiCad will show it as an update.
+
+### Option 2: install the zip
+
+1. Grab `kicad-importer-<version>.zip` from the [releases page](https://github.com/notaroomba/kicad-importer/releases)
+2. In the Plugin and Content Manager click "Install from File..." and pick the zip. Don't unzip it, KiCad wants the zip as is
+
+### Option 3: copy it in by hand (no Plugin Manager)
+
+1. Clone or download this repo
+2. In the PCB editor go to Tools > External Plugins > Open Plugin Directory. On my Mac that's `~/Documents/KiCad/9.0/scripting/plugins`
+3. Make a folder in there called `kicad_importer` and copy everything inside `plugins/` into it (so `kicad_importer/__init__.py` exists)
+4. Tools > External Plugins > Refresh Plugins, or just restart the PCB editor
+
+Either way, restart the PCB editor if the button doesn't show up.
 
 ## Usage
 
@@ -40,6 +59,16 @@ https://www.newark.com/stmicroelectronics/stm32f405rgt6/32-bit-microcontroller-a
 ```
 
 Other country sites (digikey.de, mouser.co.uk, uk.farnell.com, etc.) work too.
+
+## Using it without KiCad
+
+You can also run it from a terminal with plain Python 3.9+, no KiCad and no extra packages. Clone the repo and run it from the repo folder:
+
+```
+python3 -m plugins.importer C2040 https://www.digikey.com/en/products/detail/stmicroelectronics/STM32F405RGT6/2754208 --project ~/my-project
+```
+
+It does the same thing as the button: same library, same lib tables, same `parts.csv`. If a distributor link has no exact LCSC match it prints the closest ones and you rerun it with the C number you want. Leave out `--project` and it uses the folder you're in. Running it with no arguments just runs the link parser self-check.
 
 ## Folder layout
 

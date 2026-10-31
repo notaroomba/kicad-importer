@@ -20,6 +20,7 @@ jobs:
         run: |
           python3 - <<'PY'
           import hashlib, json, os, zipfile
+          from datetime import datetime, timezone
           from pathlib import Path
 
           tag = os.environ["TAG"]
@@ -44,10 +45,22 @@ jobs:
           ver["download_size"] = len(data)
           ver["download_url"] = f"https://github.com/{os.environ['REPO']}/releases/download/{tag}/{zip_name}"
           Path("dist/metadata.json").write_text(json.dumps(meta, indent=2))
-          print(json.dumps(meta, indent=2))
+
+          # PCM repository: add .../releases/latest/download/repository.json in KiCad
+          base = f"https://github.com/{os.environ['REPO']}/releases/download/{tag}/"
+          now = datetime.now(timezone.utc)
+          stamp = dict(update_timestamp=int(now.timestamp()), update_time_utc=now.strftime("%Y-%m-%d %H:%M:%S"))
+          Path("dist/packages.json").write_text(json.dumps({"packages": [meta]}, indent=2))
+          with zipfile.ZipFile("dist/resources.zip", "w") as z:
+              z.write("resources/icon.png", meta["identifier"] + "/icon.png")
+          repo = {"$schema": meta["$schema"], "name": "notaroomba's KiCad plugins", "maintainer": meta["author"]}
+          for key, name in (("packages", "packages.json"), ("resources", "resources.zip")):
+              repo[key] = dict(url=base + name, sha256=hashlib.sha256(Path("dist", name).read_bytes()).hexdigest(), **stamp)
+          Path("dist/repository.json").write_text(json.dumps(repo, indent=2))
+          print(json.dumps(repo, indent=2))
           PY
 
       - name: Create release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "${{ github.ref_name }}" dist/*.zip dist/metadata.json --title "${{ github.ref_name }}" --generate-notes
+        run: gh release create "${{ github.ref_name }}" dist/*.zip dist/*.json --title "${{ github.ref_name }}" --generate-notes

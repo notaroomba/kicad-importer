@@ -252,7 +252,39 @@ if pcbnew:
             dlg.Destroy()
 
 
-if __name__ == "__main__":
+def cli(argv):
+    """Import without KiCad: python3 -m plugins.importer <link or C-number>... [--project DIR]"""
+    import argparse
+
+    ap = argparse.ArgumentParser(prog="python3 -m plugins.importer", description=cli.__doc__)
+    ap.add_argument("links", nargs="+")
+    ap.add_argument("--project", default=".", help="KiCad project folder (default: current folder)")
+    args = ap.parse_args(argv)
+    logging.basicConfig(level=logging.WARNING, format="%(message)s")
+    api, failed = EasyedaApi(), 0
+    for link in args.links:
+        try:
+            info = parse_link(link)
+            if not info["lcsc_id"]:
+                exact, candidates = find_lcsc(info["mpn"], api)
+                if exact:
+                    info["lcsc_id"] = exact["lcsc"]
+                else:
+                    print("No exact LCSC match for %s. Candidates:" % info["mpn"])
+                    for c in candidates:
+                        print("  %s  %s  %s  %s" % (c["lcsc"], c["model"], c["brand"], c["package"]))
+                    print("Rerun with the LCSC number you want.")
+                    failed += 1
+                    continue
+            row = run_import(info, args.project, api)
+            print("%s -> %s / %s, 3D: %s" % (info["lcsc_id"], row["symbol"], row["footprint"], ", ".join(row["models"]) or "none"))
+        except Exception as e:
+            print("%s: %s" % (link, e))
+            failed += 1
+    return 1 if failed else 0
+
+
+def self_check():
     def check(link, **want):
         got = parse_link(link)
         for k, v in want.items():
@@ -283,3 +315,9 @@ if __name__ == "__main__":
     assert _norm("LM358-DR / x") == _norm("lm358drX")
     assert _norm("XL358D") != _norm("LM358DR")
     print("all link checks passed")
+
+
+if __name__ == "__main__":
+    import sys
+
+    sys.exit(cli(sys.argv[1:]) if len(sys.argv) > 1 else self_check())
