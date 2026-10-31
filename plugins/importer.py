@@ -563,6 +563,7 @@ def resolve(info, api):
     exact, candidates = find_lcsc(info["mpn"], api)
     if exact:
         info["lcsc_id"] = exact["lcsc"]
+        info["match"] = "%s %s by %s, %s" % (exact["lcsc"], exact["model"], exact["brand"], exact["package"])
     return candidates
 
 
@@ -643,6 +644,8 @@ if wx:
                 if not info["lcsc_id"]:
                     self.say("Searching LCSC for %s (%s)..." % (info["mpn"], info["source"]))
                     candidates = resolve(info, self.api)
+                    if info.get("match"):
+                        self.say("Exact match: " + info["match"])
                     if not info["lcsc_id"]:
                         choice = self.pick(info, candidates)
                         if choice == "browser":
@@ -817,7 +820,7 @@ def cli(argv):
                 failed += 1
                 continue
             row = run_import(info, args.project, api)
-            print("%s -> %s / %s, 3D: %s" % (info["lcsc_id"], row["symbol"], row["footprint"], ", ".join(row["models"]) or "none"))
+            print("%s%s -> %s / %s, 3D: %s" % (info["lcsc_id"], " (%s)" % info["match"] if info.get("match") else "", row["symbol"], row["footprint"], ", ".join(row["models"]) or "none"))
         except Exception as e:
             print("%s: %s" % (link, e))
             failed += 1
