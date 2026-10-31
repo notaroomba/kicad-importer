@@ -3,7 +3,7 @@ name: release
 on:
   push:
     tags: ["v*"]
-    # bumping the version in metadata.json on main also releases it
+    # bumping the version in metadata.json on main also releases it (tags can be pushed too)
     branches: [main]
     paths: [metadata.json, .github/workflows/release.yml]
 
