@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import re
+import tempfile
 import time
 import urllib.parse
 import urllib.request
@@ -128,38 +129,89 @@ def _digikey_creds():
     return (cid, secret) if cid and secret else None
 
 
+def _json_call(url, data=None, headers=None):
+    req = urllib.request.Request(url, data=data, headers=headers or {})
+    with urllib.request.urlopen(req, timeout=15) as r:
+        return json.loads(r.read().decode("utf-8"))
+
+
+def _digikey_product(mpn):
+    """(auth headers, product) for the exact MPN via DigiKey's official product API, or (None, None)."""
+    creds = _digikey_creds()
+    if not creds or not mpn:
+        return None, None
+    try:
+        token = _json_call("https://api.digikey.com/v1/oauth2/token",
+                           urllib.parse.urlencode(dict(client_id=creds[0], client_secret=creds[1],
+                                                       grant_type="client_credentials")).encode(),
+                           {"Content-Type": "application/x-www-form-urlencoded"})["access_token"]
+        headers = {"Authorization": "Bearer " + token, "X-DIGIKEY-Client-Id": creds[0],
+                   "Content-Type": "application/json"}
+        found = _json_call("https://api.digikey.com/products/v4/search/keyword",
+                           json.dumps({"Keywords": mpn, "Limit": 10}).encode(), headers)
+    except Exception as e:  # network, auth, bad JSON: fall back to the search page
+        log.warning("DigiKey API lookup failed: %s", e)
+        return None, None
+    for prod in found.get("Products") or []:
+        name = prod.get("ManufacturerProductNumber") or prod.get("ManufacturerPartNumber") or ""
+        if _norm(name) == _norm(mpn):
+            return headers, prod
+    return None, None
+
+
 def digikey_models_url(mpn, host="www.digikey.com"):
-    """DigiKey's CAD models page for an exact MPN via DigiKey's official product API, or "".
+    """DigiKey's CAD models page for an exact MPN, or "".
 
     Needs your own free API app (developer.digikey.com): put its client id/secret in
     DIGIKEY_CLIENT_ID / DIGIKEY_CLIENT_SECRET or in ~/.config/kicad-importer/digikey.json.
     """
-    creds = _digikey_creds()
-    if not creds or not mpn:
-        return ""
-    try:
-        def call(url, data, headers):
-            with urllib.request.urlopen(urllib.request.Request(url, data=data, headers=headers), timeout=15) as r:
-                return json.loads(r.read().decode("utf-8"))
+    _, prod = _digikey_product(mpn)
+    pid = re.search(r"/(\d+)(?:[/?#].*)?$", (prod or {}).get("ProductUrl") or "")
+    return "https://%s/en/models/%s" % (host, pid.group(1)) if pid else ""
 
-        token = call("https://api.digikey.com/v1/oauth2/token",
-                     urllib.parse.urlencode(dict(client_id=creds[0], client_secret=creds[1],
-                                                 grant_type="client_credentials")).encode(),
-                     {"Content-Type": "application/x-www-form-urlencoded"})["access_token"]
-        found = call("https://api.digikey.com/products/v4/search/keyword",
-                     json.dumps({"Keywords": mpn, "Limit": 10}).encode(),
-                     {"Authorization": "Bearer " + token, "X-DIGIKEY-Client-Id": creds[0],
-                      "Content-Type": "application/json"})
-    except Exception as e:  # network, auth, bad JSON: fall back to the search page
-        log.warning("DigiKey API lookup failed: %s", e)
-        return ""
-    for prod in found.get("Products") or []:
-        name = prod.get("ManufacturerProductNumber") or prod.get("ManufacturerPartNumber") or ""
-        if _norm(name) == _norm(mpn):
-            pid = re.search(r"/(\d+)(?:[/?#].*)?$", prod.get("ProductUrl") or "")
-            if pid:
-                return "https://%s/en/models/%s" % (host, pid.group(1))
-    return ""
+
+STEP_RE = re.compile(r"\.(stp|step)(\?.*)?$", re.I)
+
+
+def _walk_strings(obj):
+    if isinstance(obj, str):
+        yield obj
+    elif isinstance(obj, dict):
+        for v in obj.values():
+            yield from _walk_strings(v)
+    elif isinstance(obj, list):
+        for v in obj:
+            yield from _walk_strings(v)
+
+
+def digikey_step_links(mpn):
+    """https links to .stp/.step files that DigiKey's official API lists for this MPN."""
+    headers, prod = _digikey_product(mpn)
+    if not prod:
+        return []
+    found = list(_walk_strings(prod))
+    dk = ((prod.get("ProductVariations") or [{}])[0]).get("DigiKeyProductNumber")
+    if dk:
+        try:
+            found += list(_walk_strings(_json_call("https://api.digikey.com/products/v4/search/%s/media"
+                                                   % urllib.parse.quote(dk, safe=""), None, headers)))
+        except Exception as e:
+            log.warning("DigiKey media lookup failed: %s", e)
+    return list(dict.fromkeys(u for u in found if u.startswith("https://") and STEP_RE.search(u)))
+
+
+def fetch_file(url, dest_dir, limit=100 * 1024 * 1024):
+    """Download url into dest_dir (https only, size capped). Returns the saved path."""
+    if not url.startswith("https://"):
+        raise ValueError("not an https link: " + url)
+    name = unquote(Path(urlparse(url).path).name) or "model.step"
+    dest = Path(dest_dir) / name
+    with urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": "kicad-importer"}), timeout=60) as r:
+        data = r.read(limit + 1)
+    if len(data) > limit:
+        raise ValueError("file too big: " + url)
+    dest.write_bytes(data)
+    return dest
 
 
 # ---------------- library writing ----------------
@@ -631,6 +683,9 @@ if wx:
                     self.say("  footprints: " + _short(footprints))
                     if self.watch:
                         self.watch["footprint"] = footprints[0]
+                        step, self.watch["step"] = self.watch.get("step"), None
+                        if step and not models:  # the zip had no 3D model of its own
+                            self.import_file(step, info)
                 if models:
                     self.say("  3D: " + ", ".join(models) + (" (added to %s)" % attach if attach and not footprints else ""))
                 return True
@@ -646,7 +701,8 @@ if wx:
                 info["cad_url"] = digikey_models_url(info["mpn"])
             url = (info.get("cad_url") or info["url"]
                    or "https://www.digikey.com/en/products/result?keywords=" + quote(info["mpn"] or info["lcsc_id"]))
-            self.watch = dict(info=info, since=time.time() - 2, seen={}, done=set(), footprint=None)
+            self.watch = dict(info=info, since=time.time() - 2, seen={}, done=set(), footprint=None, step=None)
+            self.fetch_step(info)
             self.say("Opening %s" % url)
             self.say(("Pick a tab (Ultra Librarian, SnapMagic, Manufacturer Provided), choose KiCad or STEP and hit Download. "
                       if info.get("cad_url") else
@@ -654,6 +710,20 @@ if wx:
                      + "I'll import whatever lands in Downloads for the next 10 minutes.")
             wx.LaunchDefaultBrowser(url)
             self.timer.Start(1000)
+
+        def fetch_step(self, info):
+            """Manufacturer STEP straight from DigiKey's API links, if it lists any."""
+            if not (info["mpn"] and _digikey_creds()):
+                return
+            for url in digikey_step_links(info["mpn"]):
+                try:
+                    tmp = tempfile.mkdtemp(prefix="kicad-importer-")
+                    self.watch["step"] = str(fetch_file(url, tmp))
+                    self.say("Got the manufacturer's STEP from DigiKey: " + os.path.basename(self.watch["step"]))
+                    return
+                except Exception as e:
+                    self.say("Couldn't download %s: %s" % (url, e))
+            self.say("DigiKey's API doesn't list a STEP file for this part, so you'll download the 3D model yourself.")
 
         def stop_watch(self):
             if self.watch:
@@ -813,6 +883,14 @@ def self_check():
     try:
         assert digikey_models_url("NRVB130LSFT1G") == "https://www.digikey.com/en/models/5258002", seen
         assert digikey_models_url("NRVB130LSFT1") == ""  # no exact match, no guessing
+        urllib.request.urlopen = lambda req, timeout=0: io.BytesIO(json.dumps(
+            {"access_token": "t"} if "oauth2" in req.full_url else
+            {"Products": [{"ManufacturerProductNumber": "X1", "ProductUrl": "https://www.digikey.com/p/1",
+                           "ProductVariations": [{"DigiKeyProductNumber": "X1-ND"}],
+                           "Links": ["https://mfr.example/cad/X1.STP?v=2", "http://insecure/x.step", "https://mfr.example/x.pdf"]}]}
+            if "keyword" in req.full_url else {"Media": [{"Url": "https://mfr.example/cad/X1.step"}]}).encode())
+        assert digikey_step_links("X1") == ["https://mfr.example/cad/X1.STP?v=2", "https://mfr.example/cad/X1.step"], digikey_step_links("X1")
+        assert digikey_step_links("Y9") == []
         del os.environ["DIGIKEY_CLIENT_ID"]
         assert digikey_models_url("NRVB130LSFT1G") == "" or DK_CONFIG.is_file()
     finally:

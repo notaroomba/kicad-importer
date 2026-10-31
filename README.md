@@ -82,7 +82,7 @@ If there's no exact match on LCSC, the pick list has an extra first option, "Get
 
 I didn't make it log in and scrape those sites for you. They don't have a public API, they block bots, and it would break every time they change their site. One click in your own browser is way more reliable.
 
-A bare part number only gets you DigiKey's search page. To land on the right models page straight away, register a free app at [developer.digikey.com](https://developer.digikey.com) and put its client ID and secret in `~/.config/kicad-importer/digikey.json` as `{"client_id": "...", "client_secret": "..."}` (or set `DIGIKEY_CLIENT_ID` and `DIGIKEY_CLIENT_SECRET`). The plugin then asks DigiKey's official API for the product and opens its models page. It still opens the page for you, you pick the format and click Download.
+A bare part number only gets you DigiKey's search page. To land on the right models page straight away, register a free app at [developer.digikey.com](https://developer.digikey.com) and put its client ID and secret in `~/.config/kicad-importer/digikey.json` as `{"client_id": "...", "client_secret": "..."}` (or set `DIGIKEY_CLIENT_ID` and `DIGIKEY_CLIENT_SECRET`). The plugin then asks DigiKey's official API for the product and opens its models page. It still opens the page for you, you pick the format and click Download. With the credentials set it also asks the API for the manufacturer's STEP file. If DigiKey lists a link for it, the plugin downloads it and attaches it to the footprint, so the only thing left for you to download is the Ultra Librarian or SnapMagic KiCad zip. If DigiKey doesn't list one, the log says so.
 
 If you saved a download somewhere else, use the "Import file..." button and pick it.
 
